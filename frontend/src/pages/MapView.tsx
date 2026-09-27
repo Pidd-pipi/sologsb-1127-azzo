@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Button, Card, Col, Descriptions, Drawer, List, Row, Select, Space, Tag, Typography } from 'antd';
+import { Button, Card, Col, Descriptions, Drawer, Input, List, Row, Select, Space, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import MapPanel from '../components/common/MapPanel';
 import FacilityIcon from '../components/common/FacilityIcon';
@@ -9,6 +9,7 @@ import { usePointStore } from '../stores/pointStore';
 import { useUiStore } from '../stores/uiStore';
 import { FACILITY_TYPES, type AccessPoint } from '../types/point';
 import { isOverdue } from '../utils/format';
+import { pointMatchesKeyword } from '../utils/pointMatch';
 
 export default function MapView() {
   const points = usePointStore((s) => s.points);
@@ -16,12 +17,19 @@ export default function MapView() {
   const rectifies = usePointStore((s) => s.rectifies);
   const typeFilter = useUiStore((s) => s.mapFacilityFilter);
   const setTypeFilter = useUiStore((s) => s.setMapFacilityFilter);
+  const keyword = useUiStore((s) => s.mapKeyword);
+  const setKeyword = useUiStore((s) => s.setMapKeyword);
   const [activeId, setActiveId] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const visible = useMemo(
-    () => (typeFilter ? points.filter((p) => p.facilityType === typeFilter) : points),
-    [points, typeFilter],
+    () =>
+      points.filter((p) => {
+        if (typeFilter && p.facilityType !== typeFilter) return false;
+        if (keyword && !pointMatchesKeyword(p, keyword)) return false;
+        return true;
+      }),
+    [points, typeFilter, keyword],
   );
 
   const latestOf = (pointId: string) =>
@@ -47,6 +55,14 @@ export default function MapView() {
           </Typography.Text>
         </div>
         <Space wrap>
+          <Input.Search
+            placeholder="名称 / 编号 / 原编号"
+            allowClear
+            style={{ width: 200 }}
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            data-testid="map-keyword"
+          />
           <Select
             placeholder="按设施类型过滤"
             style={{ width: 180 }}
@@ -104,7 +120,8 @@ export default function MapView() {
                               textOverflow: 'ellipsis',
                             }}
                           >
-                            {p.code} · {p.district}
+                            {p.code}
+                            {p.aliases?.length ? ` · 原编号 ${p.aliases.join('、')}` : ''} · {p.district}
                           </span>
                         }
                       />
@@ -129,7 +146,10 @@ export default function MapView() {
         {active ? (
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="点位编号">{active.code}</Descriptions.Item>
+              <Descriptions.Item label="点位编号">
+                {active.code}
+                {active.aliases?.length ? `（原编号 ${active.aliases.join('、')}）` : ''}
+              </Descriptions.Item>
               <Descriptions.Item label="设施类型">
                 <FacilityIcon type={active.facilityType} withLabel />
               </Descriptions.Item>

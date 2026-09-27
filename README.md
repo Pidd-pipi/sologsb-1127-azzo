@@ -36,7 +36,7 @@ docker compose down
 | --- | --- | --- |
 | `/` | 核验总览：按行政区与设施类型汇总点位数、合格率、待整改数，点击统计块下钻清单 | AccessPoint / Inspection / RectifyPlan |
 | `/points/new` | 点位登记：地图打点或手填经纬度，可同时录入首次核验实测值 | AccessPoint / Inspection |
-| `/points/:id` | 点位详情：地图定位与属性、核验历史、就地新增核验、整改跟踪 | 四个模型 |
+| `/points/:id` | 点位详情：地图定位与属性、核验历史、就地新增核验、整改跟踪；支持把重复登记的点位并入另一个点位 | 四个模型 |
 | `/routes` | 通行路线编制：选点自动串联路段，逐段填障碍数/台阶数/路缘高差，输出全线判定 | RouteSegment / AccessPoint |
 | `/map` | 设施地图：按设施类型着色渲染点位，点选弹出核验摘要 | AccessPoint / Inspection |
 | `/rectify` | 整改清单：按状态与期限分组、逾期置顶，登记复检结果 | RectifyPlan / AccessPoint |
@@ -45,7 +45,7 @@ docker compose down
 
 | 模型 | 文件 | 关键字段 |
 | --- | --- | --- |
-| AccessPoint | `src/types/point.ts` | 点位编号、名称、设施类型、经纬度、行政区、所在道路或建筑、建成年代、养护单位 |
+| AccessPoint | `src/types/point.ts` | 点位编号、名称、设施类型、经纬度、行政区、所在道路或建筑、建成年代、养护单位、历史编号别名（`aliases`）、并出标记（`mergedInto`） |
 | Inspection | `src/types/inspection.ts` | 核验日期、核验人、坡度 %、净宽 cm、扶手、盲道连续性、占用情况、结论、问题描述 |
 | RouteSegment | `src/types/route.ts` | 路线名称、起点/终点点位、长度、障碍数、台阶数、路缘高差、是否可轮椅通行 |
 | RectifyPlan | `src/types/rectify.ts` | 点位 id、整改要求、责任单位、整改期限、复检日期、状态 |
@@ -55,7 +55,9 @@ docker compose down
 - **IndexedDB（Dexie，库名 `gbaccessmap-db`）**：业务数据。含版本号与升级迁移：
   - `v1` 建 `points` / `inspections` 表；
   - `v2` 增加 `routes` 表与 `pointId` 相关索引；
-  - `v3` 增加 `rectifies` 表，并为历史「不合格」核验补建整改条目。
+  - `v3` 增加 `rectifies` 表，并为历史「不合格」核验补建整改条目；
+  - `v4` 点位增加 `aliases` / `mergedInto` 字段，支持重复点位合并（仅加字段，无需迁移数据）。
+- **重复点位合并**：在点位详情选择保留点位后，核验历史、整改条目与路线端点在单个 Dexie 事务内一并转移；双方整改状态原样保留。源点位保留为墓碑记录（`mergedInto` 指向保留点位），不再出现在地图与总览，原编号进入保留点位的 `aliases`，可按原编号搜索或访问旧链接（自动跳转保留点位）。合并操作幂等，重复执行不会再生副本；合并产生的自环路段删除、重复路段折叠（属性取保守值）。
 - **localStorage**：点位登记表单草稿（`gbaccessmap-draft:point-new`）与 UI 偏好（`gbaccessmap-ui`）。
 - 首次打开时自动写入一批示例数据，便于直接体验。
 - 容器无状态：不使用数据库服务、不挂载命名卷，清空浏览器存储即可重置数据。

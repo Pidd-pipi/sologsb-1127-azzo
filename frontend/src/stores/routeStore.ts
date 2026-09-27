@@ -38,6 +38,8 @@ interface RouteState {
   computeVerdict: () => RouteVerdict;
   saveRoute: () => Promise<number>;
   resetDraft: () => void;
+  /** 点位合并后：改挂未保存草稿的端点，并重读已保存路段 */
+  handlePointMerged: (sourceId: string, targetId: string) => Promise<void>;
 }
 
 function newKey(): string {
@@ -155,4 +157,27 @@ export const useRouteStore = create<RouteState>((set, get) => ({
   },
 
   resetDraft: () => set({ draftSegments: [], verdict: null, chain: [] }),
+
+  handlePointMerged: async (sourceId, targetId) => {
+    set((s) => {
+      // 相邻相同端点的自环草稿段直接丢弃；保留点已出现在链中则不再追加
+      const chain = s.chain.reduce<string[]>((acc, id) => {
+        const next = id === sourceId ? targetId : id;
+        if (acc[acc.length - 1] === next) return acc;
+        acc.push(next);
+        return acc;
+      }, []);
+      const draftSegments = s.draftSegments
+        .map((seg) => ({
+          ...seg,
+          key: newKey(),
+          fromPointId: seg.fromPointId === sourceId ? targetId : seg.fromPointId,
+          toPointId: seg.toPointId === sourceId ? targetId : seg.toPointId,
+        }))
+        .filter((seg) => seg.fromPointId !== seg.toPointId)
+        .map((seg, i) => ({ ...seg, order: i + 1 }));
+      return { chain, draftSegments, verdict: null };
+    });
+    await get().load();
+  },
 }));

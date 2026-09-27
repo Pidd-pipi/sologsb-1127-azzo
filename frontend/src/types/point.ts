@@ -45,6 +45,11 @@ export interface AccessPoint {
   /** 建成年代 */
   builtYear: number;
   maintainUnit: string;
+  /** 已并入当前点位的历史编号 */
+  aliases?: string[];
+  /** 非空表示该记录已并入此 id 对应的保留点位 */
+  mergedInto?: string;
+  mergedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

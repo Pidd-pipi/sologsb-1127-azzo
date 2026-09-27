@@ -4,6 +4,7 @@ import {
   Card,
   Col,
   DatePicker,
+  Input,
   Row,
   Select,
   Space,
@@ -91,7 +92,17 @@ export default function Overview() {
   }, [drill, filteredPoints]);
 
   const pointColumns: ColumnsType<AccessPoint> = [
-    { title: '点位编号', dataIndex: 'code', width: 130 },
+    {
+      title: '点位编号',
+      dataIndex: 'code',
+      width: 190,
+      render: (code: string, row) => (
+        <Space size={4} wrap>
+          <span>{code}</span>
+          {row.aliases?.length ? <Tag>原编号 {row.aliases.join('、')}</Tag> : null}
+        </Space>
+      ),
+    },
     {
       title: '名称',
       dataIndex: 'name',
@@ -168,6 +179,14 @@ export default function Overview() {
           </Typography.Text>
         </div>
         <Space wrap>
+          <Input.Search
+            placeholder="名称 / 编号 / 原编号"
+            allowClear
+            style={{ width: 200 }}
+            value={filter.keyword}
+            onChange={(e) => setFilter({ keyword: e.target.value })}
+            data-testid="overview-keyword"
+          />
           <Select
             placeholder="行政区"
             style={{ width: 130 }}

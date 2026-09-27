@@ -46,7 +46,12 @@ export default function Routes() {
   const [saving, setSaving] = useState(false);
 
   const pointOptions = useMemo(
-    () => points.map((p) => ({ value: p.id, label: `${p.code} ${p.name}` })),
+    () =>
+      points.map((p) => ({
+        value: p.id,
+        searchText: `${p.code} ${p.name} ${(p.aliases ?? []).join(' ')}`,
+        label: `${p.code} ${p.name}${p.aliases?.length ? `（原编号 ${p.aliases.join('、')}）` : ''}`,
+      })),
     [points],
   );
   const nameOf = (id: string) => points.find((p) => p.id === id)?.name ?? id;
@@ -226,9 +231,15 @@ export default function Routes() {
                     <Select
                       id="chain"
                       mode="multiple"
+                      showSearch
                       value={chain}
                       onChange={(v) => setChain(v)}
                       options={pointOptions}
+                      filterOption={(input, option) =>
+                        String(option?.searchText ?? '')
+                          .toLowerCase()
+                          .includes(input.trim().toLowerCase())
+                      }
                       placeholder="先选起点，再依次选择终点"
                       style={{ width: '100%' }}
                       maxTagCount={3}

@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   App,
+  Alert,
   Button,
   Card,
   Col,
@@ -8,6 +9,7 @@ import {
   Divider,
   Form,
   Input,
+  Modal,
   Row,
   Select,
   Space,
@@ -18,14 +20,15 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Link, useParams } from 'react-router-dom';
+import { PlusOutlined, SaveOutlined, ReloadOutlined, MergeCellsOutlined } from '@ant-design/icons';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import MapPanel from '../components/common/MapPanel';
 import MeasureInput from '../components/common/MeasureInput';
 import StatusBadge from '../components/common/StatusBadge';
 import FacilityIcon from '../components/common/FacilityIcon';
 import EmptyState from '../components/common/EmptyState';
 import { usePointStore } from '../stores/pointStore';
+import { useRouteStore } from '../stores/routeStore';
 import { OCCUPIED_LEVELS, type Inspection, type OccupiedLevel } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
 import { judgeInspection } from '../utils/routeCheck';
@@ -44,27 +47,43 @@ interface InlineInspection {
 
 export default function PointDetail() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const { message } = App.useApp();
   const points = usePointStore((s) => s.points);
+  const allPoints = usePointStore((s) => s.allPoints);
   const inspections = usePointStore((s) => s.inspections);
   const rectifies = usePointStore((s) => s.rectifies);
   const loaded = usePointStore((s) => s.loaded);
   const addInspection = usePointStore((s) => s.addInspection);
   const addRectify = usePointStore((s) => s.addRectify);
+  const mergePoint = usePointStore((s) => s.mergePoint);
+  const resolvePoint = usePointStore((s) => s.resolvePoint);
+  const handlePointMerged = useRouteStore((s) => s.handlePointMerged);
 
-  const point = useMemo(() => points.find((p) => p.id === id), [points, id]);
+  const rawPoint = useMemo(() => allPoints.find((p) => p.id === id), [allPoints, id]);
+  const canonical = useMemo(() => resolvePoint(id), [resolvePoint, id, allPoints]);
+  const point = canonical?.mergedInto ? undefined : canonical;
   const history = useMemo(
     () =>
       inspections
-        .filter((i) => i.pointId === id)
+        .filter((i) => i.pointId === (point?.id ?? id))
         .sort((a, b) => (a.date < b.date ? 1 : -1)),
-    [inspections, id],
+    [inspections, point, id],
   );
   const plans = useMemo(
     () =>
-      rectifies.filter((r) => r.pointId === id).sort((a, b) => (a.deadline < b.deadline ? -1 : 1)),
-    [rectifies, id],
+      rectifies
+        .filter((r) => r.pointId === (point?.id ?? id))
+        .sort((a, b) => (a.deadline < b.deadline ? -1 : 1)),
+    [rectifies, point, id],
   );
+
+  // 已并出的旧链接（含多级合并）落到保留点位，旧编号继续可查
+  useEffect(() => {
+    if (loaded && rawPoint?.mergedInto && canonical && canonical.id !== id) {
+      navigate(`/points/${canonical.id}`, { replace: true });
+    }
+  }, [loaded, rawPoint, canonical, id, navigate]);
 
   const [form, setForm] = useState<InlineInspection>(() => ({
     date: todayStr(),
@@ -77,6 +96,14 @@ export default function PointDetail() {
     problem: '',
   }));
   const [saving, setSaving] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState<string | undefined>();
+  const [merging, setMerging] = useState(false);
+
+  const mergeCandidates = useMemo(
+    () => (point ? points.filter((p) => p.id !== point.id) : []),
+    [point, points],
+  );
 
   const judgement = useMemo(
     () =>
@@ -102,10 +129,20 @@ export default function PointDetail() {
   }
 
   if (!point) {
+    if (rawPoint?.mergedInto && canonical && canonical.id !== id) {
+      return (
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 12 }}>
+            <Typography.Text type="secondary">正在跳转到保留点位…</Typography.Text>
+          </div>
+        </div>
+      );
+    }
     return (
       <EmptyState
         title={`未找到点位 ${id}`}
-        description="该点位可能已被删除，请返回总览重新选择"
+        description="该点位可能已被删除或并入其他点位，请返回总览重新选择"
         extra={
           <Link to="/">
             <Button type="primary">返回核验总览</Button>
@@ -153,6 +190,36 @@ export default function PointDetail() {
     } catch (e) {
       message.error(`整改条目创建失败：${e instanceof Error ? e.message : String(e)}`);
     }
+  };
+
+  const selectedMergeTarget = points.find((p) => p.id === mergeTargetId);
+
+  const handleMergeConfirm = async () => {
+    if (!selectedMergeTarget) {
+      message.warning('请先选择要并入的保留点位');
+      return;
+    }
+    setMerging(true);
+    try {
+      const result = await mergePoint(point.id, selectedMergeTarget.id);
+      await handlePointMerged(point.id, selectedMergeTarget.id);
+      message.success(
+        result.alreadyMerged
+          ? `该点位此前已并入 ${result.target.code}，未重复执行`
+          : `已并入 ${result.target.code}，转移 ${result.movedInspections} 条核验、${result.movedRectifies} 条整改`,
+      );
+      setMergeOpen(false);
+      navigate(`/points/${result.target.id}`, { replace: true });
+    } catch (e) {
+      message.error(`点位合并失败：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMerging(false);
+    }
+  };
+
+  const openMergeModal = () => {
+    setMergeTargetId(undefined);
+    setMergeOpen(true);
   };
 
   const inspectionColumns: ColumnsType<Inspection> = [
@@ -227,10 +294,15 @@ export default function PointDetail() {
             <StatusBadge value={latest?.conclusion ?? '未核验'} kind="conclusion" bordered />
           </Space>
           <Typography.Text type="secondary">
-            {point.code} · {point.district} · {point.location || '未填写所在道路或建筑'}
+            {point.code}
+            {point.aliases?.length ? ` · 原编号 ${point.aliases.join('、')}` : ''} · {point.district} ·{' '}
+            {point.location || '未填写所在道路或建筑'}
           </Typography.Text>
         </div>
-        <Space>
+        <Space wrap>
+          <Button icon={<MergeCellsOutlined />} onClick={openMergeModal} data-testid="open-merge-point">
+            并入另一个点位
+          </Button>
           <Link to="/map">
             <Button>在地图中查看</Button>
           </Link>
@@ -249,7 +321,16 @@ export default function PointDetail() {
         <Col xs={24} lg={10}>
           <Card title="点位属性" size="small">
             <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="点位编号">{point.code}</Descriptions.Item>
+              <Descriptions.Item label="点位编号">
+                <Space size={6} wrap>
+                  {point.code}
+                  {point.aliases?.length ? (
+                    <Typography.Text type="secondary" data-testid="point-aliases">
+                      原编号：{point.aliases.join('、')}
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+              </Descriptions.Item>
               <Descriptions.Item label="设施类型">
                 <FacilityIcon type={point.facilityType} withLabel />
               </Descriptions.Item>
@@ -422,6 +503,67 @@ export default function PointDetail() {
           />
         )}
       </Card>
+
+      <Modal
+        title="并入另一个点位"
+        open={mergeOpen}
+        onCancel={() => {
+          if (!merging) setMergeOpen(false);
+        }}
+        onOk={handleMergeConfirm}
+        okText="确认并入"
+        cancelText="取消"
+        okButtonProps={{ danger: true, disabled: !mergeTargetId, loading: merging }}
+        cancelButtonProps={{ disabled: merging }}
+        maskClosable={!merging}
+        destroyOnClose
+        data-testid="merge-modal"
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Typography.Text>
+            将当前点位 <Typography.Text strong>{point.code} {point.name}</Typography.Text> 并入保留点位。
+            核验历史、整改条目与路线端点会一起转移，原编号仍可作为别名查到。
+          </Typography.Text>
+          <Select
+            style={{ width: '100%' }}
+            showSearch
+            allowClear
+            placeholder="选择保留点位（可按名称 / 编号 / 原编号搜索）"
+            value={mergeTargetId}
+            onChange={(v) => setMergeTargetId(v)}
+            filterOption={(input, option) =>
+              String(option?.searchText ?? '').toLowerCase().includes(input.trim().toLowerCase())
+            }
+            options={mergeCandidates.map((p) => ({
+              value: p.id,
+              searchText: `${p.name} ${p.code} ${(p.aliases ?? []).join(' ')} ${p.location} ${p.district}`,
+              label: (
+                <Space size={6} wrap>
+                  <FacilityIcon type={p.facilityType} size={14} />
+                  <span>{p.code} {p.name}</span>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {p.district}
+                    {p.aliases?.length ? ` · 原编号 ${p.aliases.join('、')}` : ''}
+                  </Typography.Text>
+                </Space>
+              ),
+            }))}
+            data-testid="merge-target-select"
+          />
+          {selectedMergeTarget && selectedMergeTarget.facilityType !== point.facilityType ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={`两个点位的设施类型不同（${point.facilityType} → ${selectedMergeTarget.facilityType}），请确认是同一处设施`}
+            />
+          ) : null}
+          <Alert
+            type="warning"
+            showIcon
+            message="合并后当前点位不再出现在地图与总览中；重复执行不会产生副本。"
+          />
+        </Space>
+      </Modal>
     </div>
   );
 }

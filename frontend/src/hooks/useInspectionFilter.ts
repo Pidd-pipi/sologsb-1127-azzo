@@ -5,6 +5,7 @@ import type { AccessPoint } from '../types/point';
 import type { Inspection } from '../types/inspection';
 import type { RectifyPlan } from '../types/rectify';
 import { isOverdue } from '../utils/format';
+import { pointMatchesKeyword } from '../utils/pointMatch';
 
 export interface InspectionFilterResult {
   filter: InspectionFilter;
@@ -39,9 +40,10 @@ export function useInspectionFilter(): InspectionFilterResult {
       points.filter((p) => {
         if (filter.district && p.district !== filter.district) return false;
         if (filter.facilityType && p.facilityType !== filter.facilityType) return false;
+        if (filter.keyword && !pointMatchesKeyword(p, filter.keyword)) return false;
         return true;
       }),
-    [points, filter.district, filter.facilityType],
+    [points, filter.district, filter.facilityType, filter.keyword],
   );
 
   const filteredPointIds = useMemo(() => new Set(filteredPoints.map((p) => p.id)), [filteredPoints]);
