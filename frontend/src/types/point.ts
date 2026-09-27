@@ -45,6 +45,12 @@ export interface AccessPoint {
   /** 建成年代 */
   builtYear: number;
   maintainUnit: string;
+  /** 并入的重复点位原编号（别名），仍可作为检索依据 */
+  aliases?: string[];
+  /** 非空表示该记录已并入保留点，记录本身不再作为设施展示 */
+  mergedIntoId?: string;
+  /** 并入时间（ISO） */
+  mergedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

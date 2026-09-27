@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { Layout, Menu, Space, Tag, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { AutoComplete, Layout, Menu, Space, Tag, Typography } from 'antd';
 import {
   HomeOutlined,
   PlusCircleOutlined,
@@ -8,7 +8,7 @@ import {
   ToolOutlined,
   DatabaseOutlined,
 } from '@ant-design/icons';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { usePointStore } from '../stores/pointStore';
 import { useRouteStore } from '../stores/routeStore';
 
@@ -24,16 +24,46 @@ const MENU = [
 
 export default function AppLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const loadPoints = usePointStore((s) => s.load);
   const loadRoutes = useRouteStore((s) => s.load);
+  const points = usePointStore((s) => s.points);
   const pointCount = usePointStore((s) => s.points.length);
   const inspectionCount = usePointStore((s) => s.inspections.length);
   const hasKey = Boolean((import.meta.env.VITE_AMAP_KEY || '').trim());
+  const [keyword, setKeyword] = useState('');
 
   useEffect(() => {
     void loadPoints();
     void loadRoutes();
   }, [loadPoints, loadRoutes]);
+
+  // 编号 / 名称 / 历史别名（已并入记录的原编号）均可检索
+  const options = useMemo(() => {
+    const kw = keyword.trim().toUpperCase();
+    const list = kw
+      ? points.filter(
+          (p) =>
+            p.code.toUpperCase().includes(kw) ||
+            p.name.toUpperCase().includes(kw) ||
+            (p.aliases ?? []).some((a) => a.toUpperCase().includes(kw)),
+        )
+      : points;
+    return list.slice(0, 12).map((p) => ({
+      value: p.id,
+      label: (
+        <Space size={6} wrap>
+          <Typography.Text strong>{p.name}</Typography.Text>
+          <Typography.Text type="secondary">{p.code}</Typography.Text>
+          {p.aliases?.length ? (
+            <Tag color="default" style={{ marginInlineStart: 0 }}>
+              别名 {p.aliases.join('、')}
+            </Tag>
+          ) : null}
+        </Space>
+      ),
+    }));
+  }, [points, keyword]);
 
   const selectedKey =
     MENU.map((m) => m.key)
@@ -69,13 +99,27 @@ export default function AppLayout() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: 16,
             borderBottom: '1px solid #eef1f5',
           }}
         >
-          <Typography.Title level={5} style={{ margin: 0 }}>
+          <Typography.Title level={5} style={{ margin: 0, whiteSpace: 'nowrap' }}>
             城市无障碍设施核验地图
           </Typography.Title>
-          <Space size={8}>
+          <Space size={12} style={{ flex: 1, justifyContent: 'flex-end' }}>
+            <AutoComplete
+              style={{ width: 280 }}
+              options={options}
+              value={keyword}
+              onChange={setKeyword}
+              onSelect={(value) => {
+                navigate(`/points/${value}`);
+                setKeyword('');
+              }}
+              placeholder="按编号 / 名称 / 历史别名查找点位"
+              allowClear
+              data-testid="point-lookup"
+            />
             <Tag color="blue" data-testid="count-points">
               点位 {pointCount}
             </Tag>

@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   App,
+  Alert,
   Button,
   Card,
   Col,
@@ -8,6 +9,7 @@ import {
   Divider,
   Form,
   Input,
+  Modal,
   Row,
   Select,
   Space,
@@ -18,8 +20,14 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { PlusOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Link, useParams } from 'react-router-dom';
+import {
+  PlusOutlined,
+  SaveOutlined,
+  ReloadOutlined,
+  MergeCellsOutlined,
+  ExclamationCircleFilled,
+} from '@ant-design/icons';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import MapPanel from '../components/common/MapPanel';
 import MeasureInput from '../components/common/MeasureInput';
 import StatusBadge from '../components/common/StatusBadge';
@@ -44,6 +52,7 @@ interface InlineInspection {
 
 export default function PointDetail() {
   const { id = '' } = useParams();
+  const navigate = useNavigate();
   const { message } = App.useApp();
   const points = usePointStore((s) => s.points);
   const inspections = usePointStore((s) => s.inspections);
@@ -51,19 +60,31 @@ export default function PointDetail() {
   const loaded = usePointStore((s) => s.loaded);
   const addInspection = usePointStore((s) => s.addInspection);
   const addRectify = usePointStore((s) => s.addRectify);
+  const mergePoint = usePointStore((s) => s.mergePoint);
+  const resolvePoint = usePointStore((s) => s.resolvePoint);
+  const getMergedRecord = usePointStore((s) => s.getMergedRecord);
 
-  const point = useMemo(() => points.find((p) => p.id === id), [points, id]);
+  // 支持以 id、当前编号或历史别名（原编号）打开；已并入的记录跳到保留点
+  const point = useMemo(() => resolvePoint(id), [resolvePoint, points, id]);
+  const tombstone = useMemo(() => getMergedRecord(id), [getMergedRecord, points, id]);
+
   const history = useMemo(
     () =>
-      inspections
-        .filter((i) => i.pointId === id)
-        .sort((a, b) => (a.date < b.date ? 1 : -1)),
-    [inspections, id],
+      point
+        ? inspections
+            .filter((i) => i.pointId === point.id)
+            .sort((a, b) => (a.date < b.date ? 1 : -1))
+        : [],
+    [inspections, point],
   );
   const plans = useMemo(
     () =>
-      rectifies.filter((r) => r.pointId === id).sort((a, b) => (a.deadline < b.deadline ? -1 : 1)),
-    [rectifies, id],
+      point
+        ? rectifies
+            .filter((r) => r.pointId === point.id)
+            .sort((a, b) => (a.deadline < b.deadline ? -1 : 1))
+        : [],
+    [rectifies, point],
   );
 
   const [form, setForm] = useState<InlineInspection>(() => ({
@@ -77,6 +98,9 @@ export default function PointDetail() {
     problem: '',
   }));
   const [saving, setSaving] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [targetId, setTargetId] = useState('');
+  const [merging, setMerging] = useState(false);
 
   const judgement = useMemo(
     () =>
@@ -90,6 +114,13 @@ export default function PointDetail() {
     [form],
   );
 
+  // 访问已并入记录（原编号/旧链接）：提示后跳到保留点
+  useEffect(() => {
+    if (loaded && tombstone && tombstone.mergedIntoId && tombstone.mergedIntoId !== id) {
+      message.info(`编号 ${tombstone.code} 已并入 ${point?.name ?? '保留点'}，已为你跳转`);
+    }
+  }, [loaded, tombstone, id, point, message]);
+
   if (!loaded) {
     return (
       <div style={{ padding: 48, textAlign: 'center' }}>
@@ -101,11 +132,16 @@ export default function PointDetail() {
     );
   }
 
+  // 已并入的重复点：整页重定向到保留点详情
+  if (tombstone?.mergedIntoId && tombstone.mergedIntoId !== id && point) {
+    return <Navigate to={`/points/${point.id}`} replace />;
+  }
+
   if (!point) {
     return (
       <EmptyState
         title={`未找到点位 ${id}`}
-        description="该点位可能已被删除，请返回总览重新选择"
+        description="该点位可能尚未登记，或编号 / 历史别名输入有误；请返回总览重新选择"
         extra={
           <Link to="/">
             <Button type="primary">返回核验总览</Button>
@@ -114,6 +150,59 @@ export default function PointDetail() {
       />
     );
   }
+
+  const sourceInspectionCount = inspections.filter((i) => i.pointId === point.id).length;
+  const sourceRectifyCount = rectifies.filter((r) => r.pointId === point.id).length;
+
+  // 并入候选：同类设施优先，排除自身与已并入记录
+  const mergeOptions = points
+    .filter((p) => p.id !== point.id)
+    .sort((a, b) => {
+      if ((a.facilityType === point.facilityType) !== (b.facilityType === point.facilityType)) {
+        return a.facilityType === point.facilityType ? -1 : 1;
+      }
+      return a.code.localeCompare(b.code);
+    })
+    .map((p) => ({
+      value: p.id,
+      label: `${p.code} ${p.name}（${p.district}${p.facilityType === point.facilityType ? ' · 同类设施' : ''}）`,
+    }));
+  const mergeTarget = points.find((p) => p.id === targetId);
+
+  const openMerge = () => {
+    setTargetId('');
+    setMergeOpen(true);
+  };
+
+  const handleMerge = () => {
+    if (!targetId) {
+      message.warning('请先选择要并入的保留点');
+      return;
+    }
+    Modal.confirm({
+      title: '确认并入？此操作不可撤销',
+      icon: <ExclamationCircleFilled />,
+      content: `将把「${point.name}（${point.code}）」并入「${mergeTarget?.name ?? ''}」，核验历史、整改条目与路线端点全部转到保留点，原编号 ${point.code} 仍可作为别名检索，但地图与总览不再显示为第二个设施。`,
+      okText: '确认并入',
+      okType: 'danger',
+      cancelText: '再想想',
+      onOk: async () => {
+        const sourceId = point.id;
+        setMerging(true);
+        try {
+          const survivor = await mergePoint(sourceId, targetId);
+          message.success(`已并入 ${survivor.name}，原编号 ${point.code} 作为别名保留`);
+          setMergeOpen(false);
+          navigate(`/points/${survivor.id}`, { replace: true });
+        } catch (e) {
+          message.error(`并入失败：${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+          setMerging(false);
+        }
+      },
+    });
+  };
+
 
   const handleSaveInspection = async () => {
     setSaving(true);
@@ -234,6 +323,14 @@ export default function PointDetail() {
           <Link to="/map">
             <Button>在地图中查看</Button>
           </Link>
+          <Button
+            danger
+            icon={<MergeCellsOutlined />}
+            onClick={openMerge}
+            data-testid="merge-point"
+          >
+            并入其他点位
+          </Button>
           <Link to="/points/new">
             <Button type="primary" icon={<PlusOutlined />}>
               登记新点位
@@ -250,6 +347,20 @@ export default function PointDetail() {
           <Card title="点位属性" size="small">
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="点位编号">{point.code}</Descriptions.Item>
+              <Descriptions.Item label="曾用编号">
+                {point.aliases?.length ? (
+                  <Space size={4} wrap data-testid="point-aliases">
+                    {point.aliases.map((alias) => (
+                      <Tag key={alias}>{alias}</Tag>
+                    ))}
+                    <Typography.Text type="secondary" className="gb-muted">
+                      重复登记记录并入而来，仍可检索
+                    </Typography.Text>
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary">无</Typography.Text>
+                )}
+              </Descriptions.Item>
               <Descriptions.Item label="设施类型">
                 <FacilityIcon type={point.facilityType} withLabel />
               </Descriptions.Item>
@@ -422,6 +533,56 @@ export default function PointDetail() {
           />
         )}
       </Card>
+
+      <Modal
+        title={
+          <Space>
+            <MergeCellsOutlined />
+            <span>并入重复点位</span>
+          </Space>
+        }
+        open={mergeOpen}
+        onCancel={() => setMergeOpen(false)}
+        onOk={handleMerge}
+        confirmLoading={merging}
+        okText="下一步：确认并入"
+        cancelText="取消"
+        okButtonProps={{ danger: true, disabled: !targetId }}
+        destroyOnClose
+        data-testid="merge-modal"
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message={`当前记录：${point.name}（${point.code}）`}
+            description={
+              <span>
+                含核验历史 {sourceInspectionCount} 条、整改条目 {sourceRectifyCount} 条；并入后将全部转到保留点。
+              </span>
+            }
+          />
+          <div>
+            <Typography.Text>选择保留点（另一处同一路口的同一设施）</Typography.Text>
+            <Select
+              showSearch
+              style={{ width: '100%', marginTop: 6 }}
+              placeholder="按编号或名称搜索保留点"
+              value={targetId || undefined}
+              onChange={setTargetId}
+              options={mergeOptions}
+              optionFilterProp="label"
+              data-testid="merge-target-select"
+            />
+          </div>
+          <Alert
+            type="warning"
+            showIcon
+            message="并入后不可撤销"
+            description="原编号会作为别名保留，仍可检索到本设施；地图与总览不再把它计为第二个设施，双方整改状态均原样保留。"
+          />
+        </Space>
+      </Modal>
     </div>
   );
 }

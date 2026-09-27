@@ -13,6 +13,7 @@ export const DB_NAME = 'gbaccessmap-db';
  * v1 建 points / inspections
  * v2 加 routes 表与 pointId 索引
  * v3 加 rectifies 表，并为历史不合格核验补建整改条目
+ * v4 points 增加 mergedIntoId 索引：支持重复点位并入（保留原编号作为别名）
  */
 class AccessMapDb extends Dexie {
   points!: Table<AccessPoint, string>;
@@ -72,6 +73,13 @@ class AccessMapDb extends Dexie {
           });
         }
       });
+    // v4：新增字段 mergedIntoId / aliases / mergedAt 均为可选，旧数据无需搬迁
+    this.version(4).stores({
+      points: 'id, code, facilityType, district, name, mergedIntoId',
+      inspections: 'id, pointId, date, conclusion',
+      routes: 'id, routeName, fromPointId, toPointId, order',
+      rectifies: 'id, pointId, status, deadline',
+    });
   }
 }
 

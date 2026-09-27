@@ -36,7 +36,7 @@ docker compose down
 | --- | --- | --- |
 | `/` | 核验总览：按行政区与设施类型汇总点位数、合格率、待整改数，点击统计块下钻清单 | AccessPoint / Inspection / RectifyPlan |
 | `/points/new` | 点位登记：地图打点或手填经纬度，可同时录入首次核验实测值 | AccessPoint / Inspection |
-| `/points/:id` | 点位详情：地图定位与属性、核验历史、就地新增核验、整改跟踪 | 四个模型 |
+| `/points/:id` | 点位详情：地图定位与属性、核验历史、就地新增核验、整改跟踪、重复点位并入 | 四个模型 |
 | `/routes` | 通行路线编制：选点自动串联路段，逐段填障碍数/台阶数/路缘高差，输出全线判定 | RouteSegment / AccessPoint |
 | `/map` | 设施地图：按设施类型着色渲染点位，点选弹出核验摘要 | AccessPoint / Inspection |
 | `/rectify` | 整改清单：按状态与期限分组、逾期置顶，登记复检结果 | RectifyPlan / AccessPoint |
@@ -55,7 +55,8 @@ docker compose down
 - **IndexedDB（Dexie，库名 `gbaccessmap-db`）**：业务数据。含版本号与升级迁移：
   - `v1` 建 `points` / `inspections` 表；
   - `v2` 增加 `routes` 表与 `pointId` 相关索引；
-  - `v3` 增加 `rectifies` 表，并为历史「不合格」核验补建整改条目。
+  - `v3` 增加 `rectifies` 表，并为历史「不合格」核验补建整改条目；
+  - `v4` 为 `points` 增加 `mergedIntoId` 索引，支持重复点位并入（旧数据无需搬迁）。
 - **localStorage**：点位登记表单草稿（`gbaccessmap-draft:point-new`）与 UI 偏好（`gbaccessmap-ui`）。
 - 首次打开时自动写入一批示例数据，便于直接体验。
 - 容器无状态：不使用数据库服务、不挂载命名卷，清空浏览器存储即可重置数据。
@@ -63,6 +64,16 @@ docker compose down
 ## 高德地图 key
 
 `VITE_AMAP_KEY` 留空（默认）时：`useAmapLoader()` 检测到 key 为空会**立即**返回降级标记，**不会**请求 `webapi.amap.com`；页面渲染可点选、可查看详情的本地 SVG 网格视图（`MapPanel`）。配置了 key 时脚本加载失败或超时同样自动降级，因此构建与运行都不依赖该 key。
+
+## 重复点位并入
+
+督导员把同一处坡道登记两次时，在点位详情点击「并入其他点位」并选择保留点：
+
+- 核验历史、整改条目整体转到保留点，**双方原有整改状态原样保留**（不合并、不覆盖）；
+- 通行路线的起终点端点同步改写；端点重合产生的自环段、同路线重复段自动清除并重排序号；
+- 被并入记录的原编号写入保留点 `aliases`，顶部检索框按编号 / 名称 / **历史别名**均可查到保留点，旧详情链接会自动跳转；
+- 被并入记录不再出现在地图与总览统计中（`points` 只含存活点，历史记录存于 `mergedIntoId`）；
+- 操作在单个 Dexie 事务内完成且**幂等**：对同一记录重复并入直接返回保留点，不重复搬运、不再生副本；支持链式并入（A→B→C，A 的编号随链成为 C 的别名）。
 
 ## 目录结构
 
